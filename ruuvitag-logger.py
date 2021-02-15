@@ -1,23 +1,17 @@
 #!/usr/bin/python3
 
 import time
-from ruuvitag_sensor.ble_communication import BleCommunicationNix
-from ruuvitag_sensor.ruuvi import RuuviTagSensor
-from ruuvitag_sensor.decoder import UrlDecoder
+from ruuvitag_sensor.ruuvi import RuuviTagSensor, RunFlag
+from ruuvitag_sensor.data_formats import DataFormats
+from ruuvitag_sensor.decoder import get_decoder
 
-ble = BleCommunicationNix()
-
+# this for only support dataformat 5 as others are deprecated while making this
 # list all your tags MAC: TAG_NAME
 tags = {
     'CC:CA:7E:52:CC:34': '1: Backyard',
     'FB:E1:B7:04:95:EE': '2: Upstairs',
     'E8:E0:C6:0B:B8:C5': '3: Downstairs'
 }
-
-# set DataFormat
-# 1 - Weather station
-# 3 - SensorTag data format 3 (under development)
-dataFormat = '1'
 
 dweet = True # Enable or disable dweeting True/False
 dweetUrl = 'https://dweet.io/dweet/for/' # dweet.io url
@@ -53,13 +47,22 @@ if db:
 		print("DB table not found. Creating 'sensors' table ...")
 		conn.execute('''CREATE TABLE sensors
 			(
-				id				INTEGER		PRIMARY KEY AUTOINCREMENT	NOT NULL,
-				timestamp		NUMERIC		DEFAULT CURRENT_TIMESTAMP,
-				mac				TEXT		NOT NULL,
-				name			TEXT		NULL,
-				temperature		NUMERIC		NULL,
-				humidity		NUMERIC		NULL,
-				pressure		NUMERIC		NULL
+				id				            INTEGER		PRIMARY KEY AUTOINCREMENT	NOT NULL,
+				timestamp		            DATETIME	DEFAULT CURRENT_TIMESTAMP,				
+                mac				            TEXT		NOT NULL,
+				name			            TEXT		NULL,
+                battery                     NUMERIC     NULL,
+                pressure		            NUMERIC		NULL,
+                measurement_sequence_number NUMERIC     NULL,
+                acceleration_z              NUMERIC     NULL,
+                acceleration_y              NUMERIC     NULL,
+                acceleration_x              NUMERIC     NULL,
+                acceleration                NUMERIC     NULL,
+                data_format                 NUMERIC     NULL,
+				temperature		            NUMERIC		NULL,
+                tx_power                    NUMERIC     NULL,
+				humidity		            NUMERIC		NULL,
+                movement_counter            NUMERIC     NULL
 			);''')
 		print("Table created successfully\n")
 
@@ -75,11 +78,7 @@ class Rtag(RuuviTagSensor):
 		return self._name
 
 	def getData(self):
-		return ble.get_data(self._mac)
-
-
-now = time.strftime('%Y-%m-%d %H:%M:%S')
-print(now+"\n")
+		return self.get_data(self._mac)
 
 dweetData = {}
 dbData = {}
@@ -88,23 +87,17 @@ for mac, name in tags.items():
 	tag = Rtag(mac, name)
 
 	print("Looking for {} ({})".format(tag._name, tag._mac))
-	# if weather station
-	if dataFormat == '1': # get parsed data
-		encoded = RuuviTagSensor.convert_data(tag.getData());
-		data = UrlDecoder().decode_data(encoded[1])
-		print ("Data received:", data)
+	
+	(data_format, encoded) = tag.getData()
+	sensor_data = get_decoder(data_format).decode_data(encoded)
 
-		dbData[tag._mac] = {'name': tag._name}
-		# add each sensor with value to the lists
-		for sensor, value in data.items():
-			dweetData[tag._name+' '+sensor] = value
-			dbData[tag._mac].update({sensor: value})
+	print ("Data received:", sensor_data)
 
-	elif dataFormat == '3': # under development
-		print ("Data:", tag.getData())
-
-	else: # if unknown format, just print raw data
-		print ("Data:", tag.getData())
+	dbData[tag._mac] = {'name': tag._name}
+	# add each sensor with value to the lists
+	for sensor, value in sensor_data.items():
+		dweetData[tag._name+' '+sensor] = value
+		dbData[tag._mac].update({sensor: value})
 
 	print("\n")
 
@@ -119,9 +112,9 @@ if db:
 	# save data to db
 	print("Saving data to database ...")
 	for mac, content in dbData.items():
-		conn.execute("INSERT INTO sensors (timestamp,mac,name,temperature,humidity,pressure) \
-			VALUES ('{}', '{}', '{}', '{}', '{}', '{}')".\
-			format(now, mac, content['name'], content['temperature'], content['humidity'], content['pressure']))
+		conn.execute("INSERT INTO sensors (mac,name,temperature,humidity,pressure,battery,measurement_sequence_number,acceleration_z,acceleration_y,acceleration_x,acceleration,data_format,tx_power,movement_counter) \
+			VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}')".\
+			format(mac, content['name'], content['temperature'], content['humidity'], content['pressure'], content['battery'], content['measurement_sequence_number'], content['acceleration_z'], content['acceleration_y'], content['acceleration_x'], content['acceleration'], content['data_format'], content['tx_power'], content['movement_counter']))
 	conn.commit()
 	conn.close()
 	print("Done.")
